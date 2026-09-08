@@ -204,10 +204,8 @@ fn resolve_vectors(
         cache::resolve(&prompts, stored, &cache)
     };
 
-    let mut owned: HashMap<String, Vec<f32>> = hits
-        .drain()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
+    let mut owned: HashMap<String, Vec<f32>> =
+        hits.drain().map(|(k, v)| (k.to_string(), v)).collect();
 
     if !misses.is_empty() {
         let mut text = Text::load(
@@ -292,12 +290,10 @@ fn admin(app: &App, method: &str, segments: &[&str], body: &str) -> (u16, Value)
             }
         }
 
-        ("POST", ["hooks", id, "rotate"]) => {
-            match app.store.lock().unwrap().rotate(id) {
-                Ok(key) => (200, json!({"id": id, "key": key})),
-                Err(_) => (404, json!({"error": "not found"})),
-            }
-        }
+        ("POST", ["hooks", id, "rotate"]) => match app.store.lock().unwrap().rotate(id) {
+            Ok(key) => (200, json!({"id": id, "key": key})),
+            Err(_) => (404, json!({"error": "not found"})),
+        },
 
         ("DELETE", ["hooks", id]) => match app.store.lock().unwrap().delete(id) {
             Ok(()) => (204, json!(null)),
@@ -354,7 +350,11 @@ fn send(request: Request, status: u16, payload: Value) {
         return;
     }
     let body = payload.to_string();
-    let header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
-        .expect("static header");
-    let _ = request.respond(Response::from_string(body).with_status_code(status).with_header(header));
+    let header =
+        Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).expect("static header");
+    let _ = request.respond(
+        Response::from_string(body)
+            .with_status_code(status)
+            .with_header(header),
+    );
 }

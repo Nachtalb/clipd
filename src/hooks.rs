@@ -70,7 +70,11 @@ impl Store {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        Self { path: path.to_path_buf(), hooks, pepper: pepper.to_vec() }
+        Self {
+            path: path.to_path_buf(),
+            hooks,
+            pepper: pepper.to_vec(),
+        }
     }
 
     pub fn hash_key(&self, key: &str) -> String {
@@ -371,7 +375,9 @@ mod tests {
         let mut s = Store::open(&tmp("minlabels"), PEPPER);
         let one = HashMap::from([("a".to_string(), "a photo of a cat".to_string())]);
         assert!(s.create("t".into(), one, HashMap::new()).is_err());
-        assert!(s.create("t".into(), HashMap::new(), HashMap::new()).is_err());
+        assert!(s
+            .create("t".into(), HashMap::new(), HashMap::new())
+            .is_err());
 
         let (id, _) = s.create("t".into(), labels(), HashMap::new()).unwrap();
         let one = HashMap::from([("a".to_string(), "a photo of a cat".to_string())]);
@@ -422,7 +428,10 @@ mod tests {
 
     #[test]
     fn admin_password_compare() {
-        assert!(admin_ok("correct horse battery staple", "correct horse battery staple"));
+        assert!(admin_ok(
+            "correct horse battery staple",
+            "correct horse battery staple"
+        ));
         assert!(!admin_ok("correct horse battery staple", "wrong"));
         assert!(!admin_ok("", ""), "empty password must never authenticate");
         assert!(!admin_ok("", "anything"));

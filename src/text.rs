@@ -110,8 +110,7 @@ mod tests {
         if !dir.join("text.onnx").exists() {
             return;
         }
-        let mut text =
-            Text::load(&dir.join("text.onnx"), &dir.join("tokenizer.json")).unwrap();
+        let mut text = Text::load(&dir.join("text.onnx"), &dir.join("tokenizer.json")).unwrap();
         assert!(text.embed_batch(&[]).unwrap().is_empty());
     }
 }

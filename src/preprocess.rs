@@ -80,13 +80,20 @@ mod tests {
         // sit between the two extremes rather than at either end.
         let mut img = RgbImage::new(448, 224);
         for (x, _y, px) in img.enumerate_pixels_mut() {
-            *px = if x < 224 { Rgb([0, 0, 0]) } else { Rgb([255, 255, 255]) };
+            *px = if x < 224 {
+                Rgb([0, 0, 0])
+            } else {
+                Rgb([255, 255, 255])
+            };
         }
         let out = preprocess(&DynamicImage::ImageRgb8(img));
         let n = (SIZE * SIZE) as usize;
         let mean: f32 = out[..n].iter().sum::<f32>() / n as f32;
         let lo = (0.0 - MEAN[0]) / STD[0];
         let hi = (1.0 - MEAN[0]) / STD[0];
-        assert!(mean > lo + 0.1 && mean < hi - 0.1, "mean {mean} not centered");
+        assert!(
+            mean > lo + 0.1 && mean < hi - 0.1,
+            "mean {mean} not centered"
+        );
     }
 }

@@ -37,7 +37,13 @@ pub fn rank(image: &[f32], labels: &[(String, Vec<f32>)]) -> Ranked {
         .iter()
         .enumerate()
         .map(|(i, (id, _))| {
-            (id.clone(), Score { cosine: cosines[i], softmax: probs[i] })
+            (
+                id.clone(),
+                Score {
+                    cosine: cosines[i],
+                    softmax: probs[i],
+                },
+            )
         })
         .collect();
 
@@ -108,10 +114,7 @@ mod tests {
 
     #[test]
     fn every_label_appears_in_scores() {
-        let labels = vec![
-            ("a".to_string(), unit(0, 4)),
-            ("b".to_string(), unit(1, 4)),
-        ];
+        let labels = vec![("a".to_string(), unit(0, 4)), ("b".to_string(), unit(1, 4))];
         let r = rank(&unit(0, 4), &labels);
         assert_eq!(r.scores.len(), 2);
         let total: f32 = r.scores.values().map(|s| s.softmax).sum();

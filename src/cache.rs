@@ -23,7 +23,10 @@ impl Cache {
                 Some(decode(&buf))
             })
             .unwrap_or_default();
-        Self { path: path.to_path_buf(), map }
+        Self {
+            path: path.to_path_buf(),
+            map,
+        }
     }
 
     pub fn get(&self, prompt: &str) -> Option<&Vec<f32>> {

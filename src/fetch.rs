@@ -23,7 +23,10 @@ impl Fetcher {
                 " (+https://github.com/Nachtalb/clipd)"
             ))
             .build();
-        Self { allowlist, agent: config.into() }
+        Self {
+            allowlist,
+            agent: config.into(),
+        }
     }
 
     pub fn allows(&self, url: &str) -> bool {

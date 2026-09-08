@@ -98,10 +98,6 @@ impl Store {
         v
     }
 
-    pub fn ids(&self) -> Vec<String> {
-        self.hooks.keys().cloned().collect()
-    }
-
     /// Create a hook. Returns (id, plaintext key) — the key is never stored.
     pub fn create(
         &mut self,

@@ -1,0 +1,16 @@
+services:
+  clipd:
+    build: .
+    image: clipd:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      CLIPD_ADMIN_PASSWORD: ${CLIPD_ADMIN_PASSWORD:?set in .env}
+      CLIPD_KEY_PEPPER: ${CLIPD_KEY_PEPPER:?set in .env}
+      CLIPD_URL_ALLOWLIST: ${CLIPD_URL_ALLOWLIST:?comma-separated hostnames}
+    volumes:
+      - clipd-data:/data
+
+volumes:
+  clipd-data:

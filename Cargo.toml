@@ -7,7 +7,7 @@ description = "CLIP image ranking over an API-key'd webhook"
 repository = "https://github.com/Nachtalb/clipd"
 
 [dependencies]
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls"] }
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls"] }
 ndarray = "0.17"
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 tiny_http = "0.12"

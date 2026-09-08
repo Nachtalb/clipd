@@ -17,6 +17,11 @@ impl Fetcher {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(TIMEOUT))
             .max_redirects(2)
+            .user_agent(concat!(
+                "clipd/",
+                env!("CARGO_PKG_VERSION"),
+                " (+https://github.com/Nachtalb/clipd)"
+            ))
             .build();
         Self { allowlist, agent: config.into() }
     }

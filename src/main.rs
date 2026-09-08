@@ -1,4 +1,5 @@
 mod cache;
+mod hooks;
 mod preprocess;
 mod score;
 mod text;

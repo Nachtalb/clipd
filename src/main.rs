@@ -1,3 +1,4 @@
+mod cache;
 mod preprocess;
 mod text;
 mod vision;

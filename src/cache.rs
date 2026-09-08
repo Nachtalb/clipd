@@ -77,8 +77,10 @@ fn decode(buf: &[u8]) -> HashMap<u64, Vec<f32>> {
     for chunk in buf.chunks_exact(rec) {
         let key = u64::from_le_bytes(chunk[..8].try_into().unwrap());
         let vec = chunk[8..]
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect();
         map.insert(key, vec);
     }

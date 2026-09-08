@@ -43,6 +43,8 @@ struct HookRequest {
     name: Option<String>,
     #[serde(default)]
     labels: Option<HashMap<String, String>>,
+    #[serde(default)]
+    allowlist: Option<Vec<String>>,
 }
 
 fn main() {
@@ -53,17 +55,6 @@ fn main() {
             std::process::exit(1);
         }
     };
-
-    let allowlist: Vec<String> = std::env::var("CLIPD_URL_ALLOWLIST")
-        .unwrap_or_default()
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if allowlist.is_empty() {
-        eprintln!("clipd: CLIPD_URL_ALLOWLIST must list at least one hostname");
-        std::process::exit(1);
-    }
 
     let data_dir = PathBuf::from(env_or("DATA_DIR", "/data"));
     let model_dir = PathBuf::from(env_or("MODEL_DIR", "/models"));
@@ -81,7 +72,7 @@ fn main() {
         store: Mutex::new(Store::open(&data_dir.join("hooks.json"), pepper.as_bytes())),
         cache: Mutex::new(Cache::load(&data_dir.join("label_cache.bin"))),
         vision: Mutex::new(vision),
-        fetcher: Fetcher::new(allowlist),
+        fetcher: Fetcher::new(),
         admin_password,
         model_dir,
     };
@@ -164,7 +155,7 @@ fn rank(app: &App, id: &str, key: &str, body: &str) -> (u16, Value) {
 
     let mut results = Vec::new();
     for url in &req.images {
-        let image = match app.fetcher.fetch(url) {
+        let image = match app.fetcher.fetch(&hook.allowlist, url) {
             Ok(i) => i,
             Err(e) => {
                 results.push(json!({"image": url, "error": e}));
@@ -246,14 +237,23 @@ fn admin(app: &App, method: &str, segments: &[&str], body: &str) -> (u16, Value)
                 Ok(r) => r,
                 Err(e) => return (400, json!({"error": format!("bad request: {e}")})),
             };
-            let (Some(name), Some(labels)) = (req.name, req.labels) else {
-                return (400, json!({"error": "name and labels are required"}));
+            let (Some(name), Some(labels), Some(allowlist)) = (req.name, req.labels, req.allowlist)
+            else {
+                return (
+                    400,
+                    json!({"error": "name, labels and allowlist are required"}),
+                );
             };
             let vectors = match embed_labels(app, &labels) {
                 Ok(v) => v,
                 Err(e) => return (400, json!({"error": e})),
             };
-            match app.store.lock().unwrap().create(name, labels, vectors) {
+            match app
+                .store
+                .lock()
+                .unwrap()
+                .create(name, labels, vectors, allowlist)
+            {
                 Ok((id, key)) => (201, json!({"id": id, "key": key})),
                 Err(e) => (400, json!({"error": e})),
             }
@@ -280,7 +280,7 @@ fn admin(app: &App, method: &str, segments: &[&str], body: &str) -> (u16, Value)
                 None => None,
             };
             let mut store = app.store.lock().unwrap();
-            match store.update(id, req.name, req.labels, vectors) {
+            match store.update(id, req.name, req.labels, vectors, req.allowlist) {
                 Ok(()) => match store.get(id) {
                     Some(h) => (200, serde_json::to_value(h.view(id)).unwrap_or(json!({}))),
                     None => (404, json!({"error": "not found"})),

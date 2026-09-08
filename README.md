@@ -28,7 +28,9 @@ ADMIN='your-admin-password-here!!'
 curl -sX POST localhost:8080/admin/hooks \
   -H "Authorization: Bearer $ADMIN" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"scenes","labels":{
+  -d '{"name":"scenes",
+       "allowlist":["f.example.com"],
+       "labels":{
         "landscape":"a photograph of an outdoor landscape",
         "portrait":"a photograph of a person",
         "other":"a photograph of something else"}}'
@@ -65,7 +67,6 @@ All configuration is environment variables. There are no command-line flags.
 |---|---|---|---|
 | `CLIPD_ADMIN_PASSWORD` | yes | — | ≥16 characters; guards `/admin/*` |
 | `CLIPD_KEY_PEPPER` | yes | — | ≥32 bytes; HMAC pepper for hook keys |
-| `CLIPD_URL_ALLOWLIST` | yes | — | Comma-separated hosts, `*.example.com` allowed |
 | `DATA_DIR` | no | `/data` | `hooks.json`, `label_cache.bin` |
 | `MODEL_DIR` | no | `/models` | Baked into the image |
 | `PORT` | no | `8080` | |
@@ -88,14 +89,26 @@ request; new prompts are embedded on the fly and cached permanently.
 
 ```
 GET    /admin/hooks
-POST   /admin/hooks              {name, labels}
+POST   /admin/hooks              {name, labels, allowlist}
 GET    /admin/hooks/<id>
-PATCH  /admin/hooks/<id>         {name?, labels?}
+PATCH  /admin/hooks/<id>         {name?, labels?, allowlist?}
 POST   /admin/hooks/<id>/rotate
 DELETE /admin/hooks/<id>
 ```
 
 `GET /healthz` is unauthenticated.
+
+## Allowlist
+
+Each hook carries its own list of hostnames it may fetch images from:
+
+```json
+{"allowlist": ["f.example.com", "*.cdn.example.com"]}
+```
+
+`*.example.com` matches `example.com` and any subdomain. Matching is on the
+parsed host only, so `https://f.example.com@evil.com/x.jpg` does not match.
+Required at create time; a bare `"*"` and an empty list are both refused.
 
 ## Labels
 
@@ -128,9 +141,11 @@ then needs `/rotate`. Treat the pepper as permanent.
 
 ## Security notes
 
-- Outbound fetches are restricted to `CLIPD_URL_ALLOWLIST`. Without it the
-  service would fetch any URL a caller supplies, including cloud metadata
-  endpoints. There is no implicit default.
+- Outbound fetches are restricted to **each hook's own `allowlist`**. A hook can
+  only fetch hosts it was created with, so one hook's key cannot be used to reach
+  another hook's sources or a cloud metadata endpoint. The field is required at
+  create time, cannot be emptied, and a bare `"*"` is refused — there is no
+  implicit default and no way to opt out.
 - Images are capped at 20 MB, requests at 1 MB, fetches at 10 s.
 - Missing and wrong credentials both return an identical 401.
 

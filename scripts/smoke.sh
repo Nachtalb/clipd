@@ -37,7 +37,7 @@ EOF
 IMGPID=$!
 
 CLIPD_ADMIN_PASSWORD="$ADMIN" CLIPD_KEY_PEPPER="$PEPPER" \
-CLIPD_URL_ALLOWLIST="127.0.0.1" DATA_DIR="$DATA" MODEL_DIR="$PWD/models" PORT="$PORT" \
+DATA_DIR="$DATA" MODEL_DIR="$PWD/models" PORT="$PORT" \
   ./target/release/clipd & CLIPDPID=$!
 
 cleanup() { kill $CLIPDPID $IMGPID 2>/dev/null; rm -rf "$DATA"; }
@@ -57,7 +57,7 @@ check "admin wrong pw"     401 "$(code -H 'Authorization: Bearer nope' $BASE/adm
 check "unknown route"      404 "$(code -H "Authorization: Bearer $ADMIN" $BASE/nope)"
 
 echo "== hook lifecycle"
-LABELS='{"name":"smoke","labels":{"red":"a photo of a red square","blue":"a photo of a blue square"}}'
+LABELS='{"name":"smoke","allowlist":["127.0.0.1"],"labels":{"red":"a photo of a red square","blue":"a photo of a blue square"}}'
 CREATE=$(curl -s -X POST -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   --data-binary "$LABELS" "$BASE/admin/hooks")
 ID=$(echo "$CREATE" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))')
@@ -66,7 +66,7 @@ KEY=$(echo "$CREATE" | python3 -c 'import sys,json;print(json.load(sys.stdin).ge
 case "$KEY" in clipd_*) echo "  ok   key has clipd_ prefix"; PASS=$((PASS+1));; *) echo "  FAIL key prefix: $KEY"; FAIL=$((FAIL+1));; esac
 
 check "too few labels"     400 "$(code -X POST -H "Authorization: Bearer $ADMIN" \
-  --data-binary '{"name":"x","labels":{"only":"a photo of one thing"}}' $BASE/admin/hooks)"
+  --data-binary '{"name":"x","allowlist":["127.0.0.1"],"labels":{"only":"a photo of one thing"}}' $BASE/admin/hooks)"
 
 LIST=$(curl -s -H "Authorization: Bearer $ADMIN" "$BASE/admin/hooks")
 echo "$LIST" | grep -q '"key"' && { echo "  FAIL list leaks key"; FAIL=$((FAIL+1)); } \
@@ -99,6 +99,24 @@ BLOCKED=$(curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: appl
 echo "$BLOCKED" | grep -qi 'ALLOWLIST' && { echo "  ok   metadata endpoint blocked"; PASS=$((PASS+1)); } \
   || { echo "  FAIL ssrf: $BLOCKED"; FAIL=$((FAIL+1)); }
 
+echo "== per-hook allowlist"
+NOAL=$(code -X POST -H "Authorization: Bearer $ADMIN" \
+  --data-binary '{"name":"noal","labels":{"a":"a photo of a cat","b":"a photo of a dog"}}' $BASE/admin/hooks)
+check "create without allowlist" 400 "$NOAL"
+STAR=$(code -X POST -H "Authorization: Bearer $ADMIN" \
+  --data-binary '{"name":"star","allowlist":["*"],"labels":{"a":"a photo of a cat","b":"a photo of a dog"}}' $BASE/admin/hooks)
+check "bare * allowlist"        400 "$STAR"
+
+# a second hook scoped to a DIFFERENT host must not be able to fetch ours
+OTHER=$(curl -s -X POST -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  --data-binary '{"name":"other","allowlist":["example.org"],"labels":{"a":"a photo of a cat","b":"a photo of a dog"}}' $BASE/admin/hooks)
+OID=$(echo "$OTHER" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))')
+OKEY=$(echo "$OTHER" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("key",""))')
+XHOST=$(curl -s -X POST -H "Authorization: Bearer $OKEY" -H 'Content-Type: application/json' \
+  --data-binary '{"images":["http://127.0.0.1:18081/red.png"]}' "$BASE/h/$OID")
+echo "$XHOST" | grep -qi "allowlist" && { echo "  ok   other hook cannot fetch our host"; PASS=$((PASS+1)); } \
+  || { echo "  FAIL cross-hook fetch: $XHOST"; FAIL=$((FAIL+1)); }
+
 echo "== rotate + delete"
 NEWKEY=$(curl -s -X POST -H "Authorization: Bearer $ADMIN" "$BASE/admin/hooks/$ID/rotate" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin).get("key",""))')
@@ -112,15 +130,13 @@ check "key dead after del" 401 "$(code -X POST -H "Authorization: Bearer $NEWKEY
 check "get deleted hook"   404 "$(code -H "Authorization: Bearer $ADMIN" $BASE/admin/hooks/$ID)"
 
 echo "== startup refuses weak secrets"
-OUT=$(CLIPD_ADMIN_PASSWORD="" CLIPD_KEY_PEPPER="$PEPPER" CLIPD_URL_ALLOWLIST=x \
+OUT=$(CLIPD_ADMIN_PASSWORD="" CLIPD_KEY_PEPPER="$PEPPER" \
   ./target/release/clipd 2>&1); [ $? -ne 0 ] && { echo "  ok   empty admin password refused"; PASS=$((PASS+1)); } \
   || { echo "  FAIL started without admin password"; FAIL=$((FAIL+1)); }
-OUT=$(CLIPD_ADMIN_PASSWORD="$ADMIN" CLIPD_KEY_PEPPER="short" CLIPD_URL_ALLOWLIST=x \
+OUT=$(CLIPD_ADMIN_PASSWORD="$ADMIN" CLIPD_KEY_PEPPER="short" \
   ./target/release/clipd 2>&1); [ $? -ne 0 ] && { echo "  ok   short pepper refused"; PASS=$((PASS+1)); } \
   || { echo "  FAIL started with short pepper"; FAIL=$((FAIL+1)); }
-OUT=$(CLIPD_ADMIN_PASSWORD="$ADMIN" CLIPD_KEY_PEPPER="$PEPPER" CLIPD_URL_ALLOWLIST="" \
-  ./target/release/clipd 2>&1); [ $? -ne 0 ] && { echo "  ok   empty allowlist refused"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL started with empty allowlist"; FAIL=$((FAIL+1)); }
+
 
 echo
 echo "passed: $PASS  failed: $FAIL"

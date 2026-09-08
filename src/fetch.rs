@@ -1,4 +1,4 @@
-//! Image fetching with an SSRF hostname allowlist.
+//! Image fetching with a per-hook SSRF hostname allowlist.
 
 use image::DynamicImage;
 use std::io::Read;
@@ -8,12 +8,11 @@ const MAX_BYTES: u64 = 20 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Fetcher {
-    allowlist: Vec<String>,
     agent: ureq::Agent,
 }
 
 impl Fetcher {
-    pub fn new(allowlist: Vec<String>) -> Self {
+    pub fn new() -> Self {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(TIMEOUT))
             .max_redirects(2)
@@ -24,16 +23,17 @@ impl Fetcher {
             ))
             .build();
         Self {
-            allowlist,
             agent: config.into(),
         }
     }
 
-    pub fn allows(&self, url: &str) -> bool {
+    /// True when `url`'s host matches any entry in this hook's allowlist.
+    /// An empty allowlist denies everything.
+    pub fn allows(allowlist: &[String], url: &str) -> bool {
         let Some(host) = host_of(url) else {
             return false;
         };
-        self.allowlist.iter().any(|a| {
+        allowlist.iter().any(|a| {
             let a = a.trim().to_ascii_lowercase();
             if let Some(suffix) = a.strip_prefix("*.") {
                 host == suffix || host.ends_with(&format!(".{suffix}"))
@@ -43,12 +43,12 @@ impl Fetcher {
         })
     }
 
-    pub fn fetch(&self, url: &str) -> Result<DynamicImage, String> {
+    pub fn fetch(&self, allowlist: &[String], url: &str) -> Result<DynamicImage, String> {
         if !url.starts_with("https://") && !url.starts_with("http://") {
             return Err("only http(s) urls are supported".into());
         }
-        if !self.allows(url) {
-            return Err("host not in CLIPD_URL_ALLOWLIST".into());
+        if !Self::allows(allowlist, url) {
+            return Err("host not in this hook's allowlist".into());
         }
 
         let mut resp = self
@@ -91,59 +91,76 @@ fn host_of(url: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn f(list: &[&str]) -> Fetcher {
-        Fetcher::new(list.iter().map(|s| s.to_string()).collect())
+    fn list(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
     }
 
     #[test]
     fn exact_host_allowed() {
-        let f = f(&["example.com"]);
-        assert!(f.allows("https://example.com/a.jpg"));
-        assert!(f.allows("https://EXAMPLE.com/a.jpg"));
-        assert!(!f.allows("https://evil.com/a.jpg"));
+        let l = list(&["example.com"]);
+        assert!(Fetcher::allows(&l, "https://example.com/a.jpg"));
+        assert!(Fetcher::allows(&l, "https://EXAMPLE.com/a.jpg"));
+        assert!(!Fetcher::allows(&l, "https://evil.com/a.jpg"));
     }
 
     #[test]
     fn wildcard_matches_subdomains_only() {
-        let f = f(&["*.example.com"]);
-        assert!(f.allows("https://cdn.example.com/a.jpg"));
-        assert!(f.allows("https://example.com/a.jpg"));
-        assert!(!f.allows("https://notexample.com/a.jpg"));
-        assert!(!f.allows("https://example.com.evil.net/a.jpg"));
+        let l = list(&["*.example.com"]);
+        assert!(Fetcher::allows(&l, "https://cdn.example.com/a.jpg"));
+        assert!(Fetcher::allows(&l, "https://example.com/a.jpg"));
+        assert!(!Fetcher::allows(&l, "https://notexample.com/a.jpg"));
+        assert!(!Fetcher::allows(&l, "https://example.com.evil.net/a.jpg"));
     }
 
     #[test]
     fn userinfo_cannot_spoof_host() {
-        let f = f(&["example.com"]);
-        assert!(!f.allows("https://example.com@evil.com/a.jpg"));
-        assert!(!f.allows("https://user:pw@evil.com/a.jpg"));
+        let l = list(&["example.com"]);
+        assert!(!Fetcher::allows(&l, "https://example.com@evil.com/a.jpg"));
+        assert!(!Fetcher::allows(&l, "https://user:pw@evil.com/a.jpg"));
     }
 
     #[test]
     fn port_is_ignored_for_matching() {
-        let f = f(&["example.com"]);
-        assert!(f.allows("https://example.com:8443/a.jpg"));
+        let l = list(&["example.com"]);
+        assert!(Fetcher::allows(&l, "https://example.com:8443/a.jpg"));
     }
 
     #[test]
     fn empty_allowlist_denies_everything() {
-        let f = f(&[]);
-        assert!(!f.allows("https://example.com/a.jpg"));
-        assert!(!f.allows("https://127.0.0.1/a.jpg"));
+        let l: Vec<String> = Vec::new();
+        assert!(!Fetcher::allows(&l, "https://example.com/a.jpg"));
+        assert!(!Fetcher::allows(&l, "https://127.0.0.1/a.jpg"));
+    }
+
+    #[test]
+    fn hooks_are_isolated_from_each_other() {
+        let a = list(&["a.example.com"]);
+        let b = list(&["b.example.com"]);
+        assert!(Fetcher::allows(&a, "https://a.example.com/x.jpg"));
+        assert!(!Fetcher::allows(&a, "https://b.example.com/x.jpg"));
+        assert!(Fetcher::allows(&b, "https://b.example.com/x.jpg"));
+        assert!(!Fetcher::allows(&b, "https://a.example.com/x.jpg"));
     }
 
     #[test]
     fn non_http_schemes_rejected() {
-        let f = f(&["example.com"]);
-        assert!(f.fetch("file:///etc/passwd").is_err());
-        assert!(f.fetch("gopher://example.com/").is_err());
+        let f = Fetcher::new();
+        let l = list(&["example.com"]);
+        assert!(f.fetch(&l, "file:///etc/passwd").is_err());
+        assert!(f.fetch(&l, "gopher://example.com/").is_err());
     }
 
     #[test]
     fn metadata_endpoints_denied_unless_listed() {
-        let f = f(&["example.com"]);
-        assert!(!f.allows("http://169.254.169.254/latest/meta-data/"));
-        assert!(!f.allows("http://localhost:8080/admin"));
-        assert!(f.fetch("http://169.254.169.254/latest/meta-data/").is_err());
+        let f = Fetcher::new();
+        let l = list(&["example.com"]);
+        assert!(!Fetcher::allows(
+            &l,
+            "http://169.254.169.254/latest/meta-data/"
+        ));
+        assert!(!Fetcher::allows(&l, "http://localhost:8080/admin"));
+        assert!(f
+            .fetch(&l, "http://169.254.169.254/latest/meta-data/")
+            .is_err());
     }
 }

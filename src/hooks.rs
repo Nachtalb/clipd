@@ -27,6 +27,9 @@ pub struct Hook {
     /// prompt sentence -> embedding
     #[serde(default)]
     pub label_vectors: HashMap<String, Vec<f32>>,
+    /// Hostnames this hook may fetch images from. Empty denies everything.
+    #[serde(default)]
+    pub allowlist: Vec<String>,
     pub created: String,
     pub rotated: Option<String>,
     pub last_used: Option<String>,
@@ -38,6 +41,7 @@ pub struct HookView {
     pub id: String,
     pub name: String,
     pub labels: HashMap<String, String>,
+    pub allowlist: Vec<String>,
     pub key_preview: String,
     pub created: String,
     pub rotated: Option<String>,
@@ -50,6 +54,7 @@ impl Hook {
             id: id.to_string(),
             name: self.name.clone(),
             labels: self.labels.clone(),
+            allowlist: self.allowlist.clone(),
             key_preview: self.key_preview.clone(),
             created: self.created.clone(),
             rotated: self.rotated.clone(),
@@ -108,8 +113,10 @@ impl Store {
         name: String,
         labels: HashMap<String, String>,
         vectors: HashMap<String, Vec<f32>>,
+        allowlist: Vec<String>,
     ) -> Result<(String, String), String> {
         validate_labels(&labels)?;
+        validate_allowlist(&allowlist)?;
         let id = random_hex(8);
         let key = generate_key();
         let hook = Hook {
@@ -118,6 +125,7 @@ impl Store {
             key_preview: preview(&key),
             labels,
             label_vectors: vectors,
+            allowlist,
             created: now(),
             rotated: None,
             last_used: None,
@@ -133,9 +141,13 @@ impl Store {
         name: Option<String>,
         labels: Option<HashMap<String, String>>,
         vectors: Option<HashMap<String, Vec<f32>>>,
+        allowlist: Option<Vec<String>>,
     ) -> Result<(), String> {
         if let Some(ref l) = labels {
             validate_labels(l)?;
+        }
+        if let Some(ref a) = allowlist {
+            validate_allowlist(a)?;
         }
         let hook = self.hooks.get_mut(id).ok_or("no such hook")?;
         if let Some(n) = name {
@@ -146,6 +158,9 @@ impl Store {
         }
         if let Some(v) = vectors {
             hook.label_vectors = v;
+        }
+        if let Some(a) = allowlist {
+            hook.allowlist = a;
         }
         self.save().map_err(|e| e.to_string())
     }
@@ -185,6 +200,25 @@ impl Store {
         f.sync_all()?;
         fs::rename(&tmp, &self.path)
     }
+}
+
+fn validate_allowlist(allowlist: &[String]) -> Result<(), String> {
+    if allowlist.is_empty() {
+        return Err("allowlist must list at least one hostname".into());
+    }
+    for entry in allowlist {
+        let e = entry.trim();
+        if e.is_empty() {
+            return Err("allowlist entries must not be empty".into());
+        }
+        if e.contains("://") || e.contains('/') {
+            return Err(format!("allowlist entry {e:?} must be a bare hostname"));
+        }
+        if e == "*" {
+            return Err("a bare \"*\" allowlist is not permitted".into());
+        }
+    }
+    Ok(())
 }
 
 fn validate_labels(labels: &HashMap<String, String>) -> Result<(), String> {
@@ -281,6 +315,10 @@ mod tests {
         d.join("hooks.json")
     }
 
+    fn al() -> Vec<String> {
+        vec!["example.com".to_string()]
+    }
+
     fn labels() -> HashMap<String, String> {
         HashMap::from([
             ("cat".to_string(), "a photo of a cat".to_string()),
@@ -291,7 +329,9 @@ mod tests {
     #[test]
     fn correct_key_passes_wrong_key_fails() {
         let mut s = Store::open(&tmp("verify"), PEPPER);
-        let (id, key) = s.create("t".into(), labels(), HashMap::new()).unwrap();
+        let (id, key) = s
+            .create("t".into(), labels(), HashMap::new(), al())
+            .unwrap();
         assert!(s.verify(&id, &key));
         assert!(!s.verify(&id, "clipd_wrong"));
         assert!(!s.verify("nosuchhook", &key));
@@ -300,7 +340,9 @@ mod tests {
     #[test]
     fn deleted_hook_key_fails() {
         let mut s = Store::open(&tmp("delete"), PEPPER);
-        let (id, key) = s.create("t".into(), labels(), HashMap::new()).unwrap();
+        let (id, key) = s
+            .create("t".into(), labels(), HashMap::new(), al())
+            .unwrap();
         assert!(s.verify(&id, &key));
         s.delete(&id).unwrap();
         assert!(!s.verify(&id, &key));
@@ -311,7 +353,9 @@ mod tests {
     fn stored_json_never_contains_key_or_pepper() {
         let path = tmp("nosecrets");
         let mut s = Store::open(&path, PEPPER);
-        let (_, key) = s.create("t".into(), labels(), HashMap::new()).unwrap();
+        let (_, key) = s
+            .create("t".into(), labels(), HashMap::new(), al())
+            .unwrap();
 
         let raw = fs::read_to_string(&path).unwrap();
         assert!(!raw.contains(&key), "plaintext key leaked to disk");
@@ -344,7 +388,9 @@ mod tests {
     #[test]
     fn rotate_keeps_identity_and_invalidates_old_key() {
         let mut s = Store::open(&tmp("rotate"), PEPPER);
-        let (id, old) = s.create("keepme".into(), labels(), HashMap::new()).unwrap();
+        let (id, old) = s
+            .create("keepme".into(), labels(), HashMap::new(), al())
+            .unwrap();
         let created = s.get(&id).unwrap().created.clone();
 
         let new = s.rotate(&id).unwrap();
@@ -364,7 +410,8 @@ mod tests {
         let path = tmp("persist");
         let (id, key) = {
             let mut s = Store::open(&path, PEPPER);
-            s.create("t".into(), labels(), HashMap::new()).unwrap()
+            s.create("t".into(), labels(), HashMap::new(), al())
+                .unwrap()
         };
         let s2 = Store::open(&path, PEPPER);
         assert!(s2.verify(&id, &key));
@@ -374,14 +421,16 @@ mod tests {
     fn fewer_than_two_labels_rejected() {
         let mut s = Store::open(&tmp("minlabels"), PEPPER);
         let one = HashMap::from([("a".to_string(), "a photo of a cat".to_string())]);
-        assert!(s.create("t".into(), one, HashMap::new()).is_err());
+        assert!(s.create("t".into(), one, HashMap::new(), al()).is_err());
         assert!(s
-            .create("t".into(), HashMap::new(), HashMap::new())
+            .create("t".into(), HashMap::new(), HashMap::new(), al())
             .is_err());
 
-        let (id, _) = s.create("t".into(), labels(), HashMap::new()).unwrap();
+        let (id, _) = s
+            .create("t".into(), labels(), HashMap::new(), al())
+            .unwrap();
         let one = HashMap::from([("a".to_string(), "a photo of a cat".to_string())]);
-        assert!(s.update(&id, None, Some(one), None).is_err());
+        assert!(s.update(&id, None, Some(one), None, None).is_err());
     }
 
     #[test]
@@ -391,14 +440,81 @@ mod tests {
             ("a".to_string(), "a photo of a cat".to_string()),
             ("b".to_string(), "   ".to_string()),
         ]);
-        assert!(s.create("t".into(), bad, HashMap::new()).is_err());
+        assert!(s.create("t".into(), bad, HashMap::new(), al()).is_err());
+    }
+
+    #[test]
+    fn allowlist_is_required_and_validated() {
+        let mut s = Store::open(&tmp("allowlist"), PEPPER);
+
+        // empty allowlist is refused — a hook that can fetch nothing is a
+        // configuration error, and defaulting to "everything" would be an SSRF.
+        assert!(s
+            .create("t".into(), labels(), HashMap::new(), vec![])
+            .is_err());
+
+        // a URL is not a hostname
+        assert!(s
+            .create(
+                "t".into(),
+                labels(),
+                HashMap::new(),
+                vec!["https://example.com/x".to_string()]
+            )
+            .is_err());
+
+        // no blanket wildcard
+        assert!(s
+            .create("t".into(), labels(), HashMap::new(), vec!["*".to_string()])
+            .is_err());
+
+        // blank entry
+        assert!(s
+            .create("t".into(), labels(), HashMap::new(), vec!["  ".to_string()])
+            .is_err());
+    }
+
+    #[test]
+    fn allowlist_persists_and_updates() {
+        let path = tmp("allowlistpersist");
+        let id = {
+            let mut s = Store::open(&path, PEPPER);
+            let (id, _) = s
+                .create(
+                    "t".into(),
+                    labels(),
+                    HashMap::new(),
+                    vec!["a.example.com".to_string()],
+                )
+                .unwrap();
+            id
+        };
+
+        // survives a reload
+        let mut s = Store::open(&path, PEPPER);
+        assert_eq!(s.get(&id).unwrap().allowlist, vec!["a.example.com"]);
+
+        // and can be replaced
+        s.update(
+            &id,
+            None,
+            None,
+            None,
+            Some(vec!["b.example.com".to_string()]),
+        )
+        .unwrap();
+        assert_eq!(s.get(&id).unwrap().allowlist, vec!["b.example.com"]);
+
+        // but not emptied
+        assert!(s.update(&id, None, None, None, Some(vec![])).is_err());
+        assert_eq!(s.get(&id).unwrap().allowlist, vec!["b.example.com"]);
     }
 
     #[test]
     fn view_omits_hash_and_vectors() {
         let mut s = Store::open(&tmp("view"), PEPPER);
         let vectors = HashMap::from([("a photo of a cat".to_string(), vec![0.5f32; 512])]);
-        let (id, key) = s.create("t".into(), labels(), vectors).unwrap();
+        let (id, key) = s.create("t".into(), labels(), vectors, al()).unwrap();
 
         let json = serde_json::to_string(&s.get(&id).unwrap().view(&id)).unwrap();
         assert!(!json.contains("key_hash"));

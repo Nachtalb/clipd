@@ -6,13 +6,9 @@ labelled prompts; it returns a similarity score per label.
 Runs on CPU. No GPU, no Python, no framework — a single Rust binary with
 ONNX Runtime and CLIP ViT-B/32 (int8).
 
-## What it does
-
-`clipd` embeds each image once and each label prompt once, then scores every
-pair by cosine similarity. It **ranks**; it does not detect. There are no
-bounding boxes, and there is no "none of these" — the highest-scoring label
-always wins, even when every score is poor. Include a catch-all label and look
-at the raw cosine values, not just the softmax.
+It **ranks**; it does not detect. There are no bounding boxes and there is no
+"none of these" — with N labels one always wins, even when every score is poor.
+Include a catch-all label and read the raw cosine values, not just the softmax.
 
 ## Quick start
 
@@ -59,6 +55,9 @@ curl -sX POST localhost:8080/h/a1b2c3d4 \
 }
 ```
 
+Per-image failures appear as `{"error": "..."}` in place of that result's
+scores; the request as a whole still returns 200.
+
 ## Configuration
 
 All configuration is environment variables. There are no command-line flags.
@@ -75,7 +74,9 @@ The service refuses to start if any required variable is missing or too short.
 
 ## Endpoints
 
-### Data plane — `Authorization: Bearer <hook_key>`
+`GET /healthz` is unauthenticated.
+
+### Data plane — `Authorization: Bearer <hook key>`
 
 ```
 POST /h/<hook_id>
@@ -85,7 +86,7 @@ POST /h/<hook_id>
 Omit `labels` to use the hook's own set. Supplying them overrides for that one
 request; new prompts are embedded on the fly and cached permanently.
 
-### Admin plane — `Authorization: Bearer $CLIPD_ADMIN_PASSWORD`
+### Admin plane — `Authorization: Bearer <admin password>`
 
 ```
 GET    /admin/hooks
@@ -96,7 +97,21 @@ POST   /admin/hooks/<id>/rotate
 DELETE /admin/hooks/<id>
 ```
 
-`GET /healthz` is unauthenticated.
+## Labels
+
+A map of your own id to a natural-language prompt:
+
+```json
+{"cat": "a photograph of a cat", "other": "a photograph of something else"}
+```
+
+Scores come back keyed by id, so you can reword a prompt without changing what
+your downstream code matches on. At least two labels are required.
+
+Write full sentences — `"a photograph of a cat"` scores measurably better than
+`"cat"`, because CLIP was trained on captions rather than tags. Prompts that
+differ only in the attribute you care about, and are otherwise identically
+worded, give the most meaningful gaps.
 
 ## Allowlist
 
@@ -109,21 +124,6 @@ Each hook carries its own list of hostnames it may fetch images from:
 `*.example.com` matches `example.com` and any subdomain. Matching is on the
 parsed host only, so `https://f.example.com@evil.com/x.jpg` does not match.
 Required at create time; a bare `"*"` and an empty list are both refused.
-
-## Labels
-
-A map of your own id to a natural-language prompt:
-
-```json
-{"cat": "a photograph of a cat", "other": "a photograph of something else"}
-```
-
-Scores come back keyed by id, so you can reword a prompt without changing what
-your downstream code matches on.
-
-Write full sentences. `"a photograph of a cat"` scores measurably better than
-`"cat"` — CLIP was trained on captions, not tags. At least two labels are
-required.
 
 ## Keys
 
@@ -141,11 +141,9 @@ then needs `/rotate`. Treat the pepper as permanent.
 
 ## Security notes
 
-- Outbound fetches are restricted to **each hook's own `allowlist`**. A hook can
-  only fetch hosts it was created with, so one hook's key cannot be used to reach
-  another hook's sources or a cloud metadata endpoint. The field is required at
-  create time, cannot be emptied, and a bare `"*"` is refused — there is no
-  implicit default and no way to opt out.
+- Outbound fetches are restricted to **each hook's own `allowlist`**, so one
+  hook's key cannot reach another hook's sources or a cloud metadata endpoint.
+  There is no implicit default and no way to opt out.
 - Images are capped at 20 MB, requests at 1 MB, fetches at 10 s.
 - Missing and wrong credentials both return an identical 401.
 
@@ -170,9 +168,9 @@ the session.
 
 ```bash
 ./scripts/fetch-models.sh
-cargo test              # 44 unit tests
+cargo test              # 47 unit tests
 cargo build --release
-./scripts/smoke.sh      # 24 end-to-end checks against a live binary
+./scripts/smoke.sh      # end-to-end checks against a live binary
 ```
 
 ## License
